@@ -1,0 +1,26 @@
+version: '3.3'
+
+services:
+  dashboard-chamados:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dashboard-chamados
+    ports:
+      - "7107:7107"
+    environment:
+      - NODE_ENV=production
+      - VITE_SUPABASE_URL=https://orqxfneopvvdwnfvnxya.supabase.co
+      - VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ycXhmbmVvcHZ2ZHduZnZueHlhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ0ODExNTIsImV4cCI6MjA3MDA1NzE1Mn0.IDr6lWDxO8mzsL55HJtNqIvEwNd5HKRURv0OXnkuIBU
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:7107/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dashboard-network
+
+networks:
+  dashboard-network:
+    driver: bridge
