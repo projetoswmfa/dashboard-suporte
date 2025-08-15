@@ -48,16 +48,12 @@ coverage/
 tmp/
 temp/
 
-# Docker
-Dockerfile
-docker-compose.yml
+# Supabase temp files
+supabase/.temp/
 
-# Documentation
-*.md
-
-# Config files
-*.config.js
-*.config.ts
+# Lock files (keep package-lock.json but ignore others)
+bun.lockb
+yarn.lock
 
 # Test files
 __tests__/
