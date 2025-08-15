@@ -1,199 +1,219 @@
-import React, { useState } from 'react';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import React, { useState, useEffect } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { Calendar } from '@/components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { CalendarIcon, CheckCircle, Clock, XCircle, Pause } from 'lucide-react';
-import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
-import { cn } from '@/lib/utils';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Calendar, Clock, User, Users } from 'lucide-react';
 import { useUpdateAttendance } from '@/hooks/useAttendances';
 import type { Attendance } from '@/types/attendance';
 import { toast } from 'sonner';
 
 interface StatusUpdateDialogProps {
   attendance: Attendance | null;
-  isOpen: boolean;
-  onClose: () => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
 export const StatusUpdateDialog: React.FC<StatusUpdateDialogProps> = ({
   attendance,
-  isOpen,
-  onClose,
+  open,
+  onOpenChange,
 }) => {
-  const [newStatus, setNewStatus] = useState<string>('');
-  const [closeDate, setCloseDate] = useState<Date | undefined>(undefined);
-  const updateAttendance = useUpdateAttendance();
+  const [newStatus, setNewStatus] = useState('');
+  const [closedDate, setClosedDate] = useState('');
+  
+  const { updateAttendance, isUpdating } = useUpdateAttendance();
 
-  // Reset form when dialog opens
-  React.useEffect(() => {
-    if (isOpen && attendance) {
+  const statuses = [
+    'Aberto',
+    'Em Andamento',
+    'Aguardando',
+    'Finalizado',
+    'Pendente'
+  ];
+
+  useEffect(() => {
+    if (attendance) {
       setNewStatus(attendance.status);
-      setCloseDate(attendance.close_date ? new Date(attendance.close_date) : undefined);
+      // Se já tem data de fechamento, usar ela, senão usar data atual se status for Finalizado
+      if (attendance.closed_at) {
+        setClosedDate(new Date(attendance.closed_at).toISOString().slice(0, 16));
+      } else if (attendance.status === 'Finalizado') {
+        setClosedDate(new Date().toISOString().slice(0, 16));
+      } else {
+        setClosedDate('');
+      }
     }
-  }, [isOpen, attendance]);
+  }, [attendance]);
 
-  if (!attendance) return null;
-
-  const handleStatusUpdate = () => {
-    if (!newStatus) {
-      toast.error('Selecione um status');
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!attendance || !newStatus) {
+      toast.error('Status é obrigatório');
       return;
     }
 
-    const updates: Partial<Attendance> = {
-      status: newStatus as 'Pendente' | 'Em andamento' | 'Aguardando' | 'Finalizado',
-    };
-
-    // Se mudou para "Finalizado", definir data de fechamento se não existir
-    if (newStatus === 'Finalizado' && !closeDate) {
-      updates.close_date = new Date().toISOString().split('T')[0];
-    } else if (newStatus === 'Finalizado' && closeDate) {
-      updates.close_date = format(closeDate, 'yyyy-MM-dd');
-    } else if (newStatus !== 'Finalizado') {
-      // Se não é finalizado, remover data de fechamento
-      updates.close_date = null;
+    if (newStatus === 'Finalizado' && !closedDate) {
+      toast.error('Data de conclusão é obrigatória para status "Finalizado"');
+      return;
     }
 
-    updateAttendance.mutate(
-      { id: attendance.id, updates },
-      {
-        onSuccess: () => {
-          toast.success('Status atualizado com sucesso!');
-          onClose();
-        },
-        onError: () => {
-          toast.error('Erro ao atualizar status');
-        },
+    try {
+      const updateData: any = {
+        id: attendance.id,
+        status: newStatus,
+      };
+
+      // Se o status for "Finalizado", incluir a data de fechamento
+      if (newStatus === 'Finalizado') {
+        updateData.closed_at = new Date(closedDate).toISOString();
+      } else {
+        // Se não for finalizado, remover a data de fechamento
+        updateData.closed_at = null;
       }
-    );
-  };
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'Finalizado':
-        return <CheckCircle className="h-4 w-4 text-green-600" />;
-      case 'Em andamento':
-        return <Clock className="h-4 w-4 text-blue-600" />;
-      case 'Aguardando':
-        return <Pause className="h-4 w-4 text-orange-600" />;
-      case 'Pendente':
-        return <XCircle className="h-4 w-4 text-yellow-600" />;
-      default:
-        return null;
+      await updateAttendance(updateData);
+      
+      onOpenChange(false);
+      toast.success('Status atualizado com sucesso!');
+    } catch (error) {
+      console.error('Erro ao atualizar status:', error);
+      toast.error('Erro ao atualizar status. Tente novamente.');
     }
   };
+
+  const getStatusColor = (status: string) => {
+    switch (status?.toLowerCase()) {
+      case 'aberto':
+        return 'bg-blue-100 text-blue-800 border-blue-200';
+      case 'em andamento':
+        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case 'aguardando':
+        return 'bg-orange-100 text-orange-800 border-orange-200';
+      case 'finalizado':
+        return 'bg-green-100 text-green-800 border-green-200';
+      case 'pendente':
+        return 'bg-red-100 text-red-800 border-red-200';
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  if (!attendance) return null;
+
+  const responsibleArray = Array.isArray(attendance.responsible) 
+    ? attendance.responsible 
+    : [attendance.responsible].filter(Boolean);
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[425px]">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {getStatusIcon(attendance.status)}
-            Atualizar Status do Atendimento
+            <Badge variant="outline">#{attendance.id}</Badge>
+            Atualizar Status
           </DialogTitle>
           <DialogDescription>
-            Altere o status do atendimento #{attendance.id} - {attendance.description}
+            Altere o status do atendimento e defina a data de conclusão se necessário.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
-          <div className="space-y-2">
-            <Label htmlFor="status">Novo Status</Label>
-            <Select value={newStatus} onValueChange={setNewStatus}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione o status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Pendente">
-                  <div className="flex items-center gap-2">
-                    <XCircle className="h-4 w-4 text-yellow-600" />
-                    Pendente
-                  </div>
-                </SelectItem>
-                <SelectItem value="Em andamento">
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-blue-600" />
-                    Em andamento
-                  </div>
-                </SelectItem>
-                <SelectItem value="Aguardando">
-                  <div className="flex items-center gap-2">
-                    <Pause className="h-4 w-4 text-orange-600" />
-                    Aguardando
-                  </div>
-                </SelectItem>
-                <SelectItem value="Finalizado">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className="h-4 w-4 text-green-600" />
-                    Finalizado
-                  </div>
-                </SelectItem>
-              </SelectContent>
-            </Select>
+        <div className="space-y-4">
+          {/* Informações atuais do atendimento */}
+          <div className="p-4 bg-gray-50 rounded-lg space-y-2">
+            <div className="flex items-center gap-2">
+              <User className="h-4 w-4 text-gray-500" />
+              <span className="font-medium">{attendance.client_name}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-gray-500" />
+              <span className="text-sm">{attendance.team}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-gray-500" />
+              <span className="text-sm">Aberto em: {formatDate(attendance.created_at)}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-gray-500" />
+              <span className="text-sm">Status atual:</span>
+              <Badge className={getStatusColor(attendance.status)}>
+                {attendance.status}
+              </Badge>
+            </div>
+            <div>
+              <span className="text-sm text-gray-500">Responsável(is): </span>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {responsibleArray.map((responsible) => (
+                  <Badge key={responsible} variant="secondary" className="text-xs">
+                    {responsible}
+                  </Badge>
+                ))}
+              </div>
+            </div>
           </div>
 
-          {newStatus === 'Finalizado' && (
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label>Data de Conclusão</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full justify-start text-left font-normal",
-                      !closeDate && "text-muted-foreground"
-                    )}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {closeDate ? format(closeDate, "dd/MM/yyyy", { locale: ptBR }) : "Selecionar data"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0">
-                  <Calendar
-                    mode="single"
-                    selected={closeDate}
-                    onSelect={setCloseDate}
-                    initialFocus
-                    locale={ptBR}
-                  />
-                </PopoverContent>
-              </Popover>
+              <Label htmlFor="status">Novo Status *</Label>
+              <Select value={newStatus} onValueChange={setNewStatus} required>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione o novo status" />
+                </SelectTrigger>
+                <SelectContent>
+                  {statuses.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      <Badge className={getStatusColor(status)}>
+                        {status}
+                      </Badge>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-          )}
 
-          <div className="bg-gray-50 p-4 rounded-lg">
-            <h4 className="font-medium text-sm mb-2">Informações Atuais:</h4>
-            <div className="text-sm text-gray-600 space-y-1">
-              <p><strong>Status atual:</strong> {attendance.status}</p>
-              <p><strong>Responsável:</strong> {attendance.responsible}</p>
-              <p><strong>Equipe:</strong> {attendance.team}</p>
-              <p><strong>Prioridade:</strong> 
-                {attendance.priority === 'ALTA' && '🔥 ALTA'}
-                {attendance.priority === 'MEDIA' && '⚡ MÉDIA'}
-                {attendance.priority === 'BAIXA' && '🟢 BAIXA'}
-              </p>
-              {attendance.close_date && (
-                <p><strong>Data de conclusão:</strong> {format(new Date(attendance.close_date), 'dd/MM/yyyy', { locale: ptBR })}</p>
-              )}
-            </div>
-          </div>
+            {newStatus === 'Finalizado' && (
+              <div className="space-y-2">
+                <Label htmlFor="closed-date">Data de Conclusão *</Label>
+                <Input
+                  id="closed-date"
+                  type="datetime-local"
+                  value={closedDate}
+                  onChange={(e) => setClosedDate(e.target.value)}
+                  required
+                />
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={isUpdating}>
+                {isUpdating ? 'Atualizando...' : 'Atualizar Status'}
+              </Button>
+            </DialogFooter>
+          </form>
         </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button 
-            onClick={handleStatusUpdate}
-            disabled={updateAttendance.isPending || !newStatus}
-          >
-            {updateAttendance.isPending ? 'Atualizando...' : 'Atualizar Status'}
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
