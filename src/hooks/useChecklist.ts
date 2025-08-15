@@ -1,176 +1,317 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
-import type { ChecklistItem, ChecklistItemInsert, ChecklistItemUpdate, ChecklistItemWithChildren } from '@/types/checklist';
+import { useState, useCallback } from 'react';
 
-// Função para organizar itens em hierarquia
-const organizeItemsHierarchy = (items: ChecklistItem[]): ChecklistItemWithChildren[] => {
-  const itemMap = new Map<string, ChecklistItemWithChildren>();
-  const rootItems: ChecklistItemWithChildren[] = [];
+export interface ChecklistItem {
+  id: string;
+  title: string;
+  description?: string;
+  completed: boolean;
+  status: 'pending' | 'in_progress' | 'completed';
+  parentId?: string;
+  children?: ChecklistItem[];
+  createdAt: Date;
+  updatedAt: Date;
+}
 
-  // Primeiro, criar o mapa de todos os itens
-  items.forEach(item => {
-    itemMap.set(item.id, {
-      ...item,
-      children: [],
-      level: 0
-    });
-  });
+export interface Checklist {
+  id: string;
+  title: string;
+  description?: string;
+  items: ChecklistItem[];
+  createdAt: Date;
+  updatedAt: Date;
+}
 
-  // Depois, organizar a hierarquia
-  items.forEach(item => {
-    const itemWithChildren = itemMap.get(item.id)!;
-    
-    if (item.parent_id) {
-      const parent = itemMap.get(item.parent_id);
-      if (parent) {
-        itemWithChildren.level = parent.level + 1;
-        parent.children.push(itemWithChildren);
-      } else {
-        // Se o pai não existe, tratar como item raiz
-        rootItems.push(itemWithChildren);
-      }
-    } else {
-      rootItems.push(itemWithChildren);
-    }
-  });
+const mockChecklists: Checklist[] = [
+  {
+    id: '1',
+    title: 'Configuração Inicial do Sistema',
+    description: 'Checklist para configuração inicial do sistema de suporte',
+    createdAt: new Date('2024-01-15'),
+    updatedAt: new Date('2024-01-15'),
+    items: [
+      {
+        id: '1-1',
+        title: 'Configurar banco de dados',
+        description: 'Configurar conexão com Supabase',
+        completed: true,
+        status: 'completed',
+        createdAt: new Date('2024-01-15'),
+        updatedAt: new Date('2024-01-15'),
+      },
+      {
+        id: '1-2',
+        title: 'Configurar autenticação',
+        description: 'Implementar sistema de login e registro',
+        completed: false,
+        status: 'in_progress',
+        createdAt: new Date('2024-01-15'),
+        updatedAt: new Date('2024-01-15'),
+        children: [
+          {
+            id: '1-2-1',
+            title: 'Configurar providers OAuth',
+            completed: true,
+            status: 'completed',
+            parentId: '1-2',
+            createdAt: new Date('2024-01-15'),
+            updatedAt: new Date('2024-01-15'),
+          },
+          {
+            id: '1-2-2',
+            title: 'Implementar middleware de auth',
+            completed: false,
+            status: 'pending',
+            parentId: '1-2',
+            createdAt: new Date('2024-01-15'),
+            updatedAt: new Date('2024-01-15'),
+          },
+        ],
+      },
+      {
+        id: '1-3',
+        title: 'Configurar interface do usuário',
+        description: 'Implementar componentes base da UI',
+        completed: false,
+        status: 'pending',
+        createdAt: new Date('2024-01-15'),
+        updatedAt: new Date('2024-01-15'),
+      },
+    ],
+  },
+  {
+    id: '2',
+    title: 'Funcionalidades de Atendimento',
+    description: 'Implementação das funcionalidades principais de atendimento',
+    createdAt: new Date('2024-01-16'),
+    updatedAt: new Date('2024-01-16'),
+    items: [
+      {
+        id: '2-1',
+        title: 'Sistema de tickets',
+        description: 'Criar, editar e gerenciar tickets',
+        completed: false,
+        status: 'in_progress',
+        createdAt: new Date('2024-01-16'),
+        updatedAt: new Date('2024-01-16'),
+      },
+      {
+        id: '2-2',
+        title: 'Notificações em tempo real',
+        description: 'Implementar sistema de notificações',
+        completed: false,
+        status: 'pending',
+        createdAt: new Date('2024-01-16'),
+        updatedAt: new Date('2024-01-16'),
+      },
+    ],
+  },
+];
 
-  // Ordenar recursivamente por order_index
-  const sortItems = (items: ChecklistItemWithChildren[]) => {
-    items.sort((a, b) => a.order_index - b.order_index);
-    items.forEach(item => {
-      if (item.children.length > 0) {
-        sortItems(item.children);
-      }
-    });
-  };
+export function useChecklist() {
+  const [checklists, setChecklists] = useState<Checklist[]>(mockChecklists);
+  const [loading, setLoading] = useState(false);
 
-  sortItems(rootItems);
-  return rootItems;
-};
+  const addChecklist = useCallback((title: string, description?: string) => {
+    const newChecklist: Checklist = {
+      id: Date.now().toString(),
+      title,
+      description,
+      items: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    setChecklists(prev => [...prev, newChecklist]);
+    return newChecklist;
+  }, []);
 
-// Função para achatar a hierarquia para exibição
-const flattenHierarchy = (items: ChecklistItemWithChildren[]): ChecklistItemWithChildren[] => {
-  const result: ChecklistItemWithChildren[] = [];
-  
-  const addItems = (items: ChecklistItemWithChildren[]) => {
-    items.forEach(item => {
-      result.push(item);
-      if (item.children.length > 0) {
-        addItems(item.children);
-      }
-    });
-  };
-  
-  addItems(items);
-  return result;
-};
+  const updateChecklist = useCallback((id: string, updates: Partial<Checklist>) => {
+    setChecklists(prev => 
+      prev.map(checklist => 
+        checklist.id === id 
+          ? { ...checklist, ...updates, updatedAt: new Date() }
+          : checklist
+      )
+    );
+  }, []);
 
-export const useChecklist = (attendanceId: string) => {
-  const queryClient = useQueryClient();
+  const deleteChecklist = useCallback((id: string) => {
+    setChecklists(prev => prev.filter(checklist => checklist.id !== id));
+  }, []);
 
-  // Buscar itens do checklist
-  const { data: rawChecklistItems = [], isLoading, error } = useQuery({
-    queryKey: ['checklist', attendanceId],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('checklist_items')
-        .select('*')
-        .eq('attendance_id', attendanceId)
-        .order('order_index', { ascending: true });
+  const addItem = useCallback((checklistId: string, title: string, description?: string, parentId?: string) => {
+    const newItem: ChecklistItem = {
+      id: `${checklistId}-${Date.now()}`,
+      title,
+      description,
+      completed: false,
+      status: 'pending',
+      parentId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
 
-      if (error) throw error;
-      return data as ChecklistItem[];
-    },
-    enabled: !!attendanceId,
-  });
+    setChecklists(prev => 
+      prev.map(checklist => {
+        if (checklist.id !== checklistId) return checklist;
 
-  // Organizar itens em hierarquia
-  const hierarchicalItems = organizeItemsHierarchy(rawChecklistItems);
-  const checklistItems = flattenHierarchy(hierarchicalItems);
+        const addItemToList = (items: ChecklistItem[]): ChecklistItem[] => {
+          if (!parentId) {
+            return [...items, newItem];
+          }
+          
+          return items.map(item => {
+            if (item.id === parentId) {
+              return {
+                ...item,
+                children: [...(item.children || []), newItem],
+                updatedAt: new Date(),
+              };
+            }
+            if (item.children) {
+              return {
+                ...item,
+                children: addItemToList(item.children),
+              };
+            }
+            return item;
+          });
+        };
 
-  // Adicionar item ao checklist
-  const addItemMutation = useMutation({
-    mutationFn: async (item: ChecklistItemInsert) => {
-      const { data, error } = await supabase
-        .from('checklist_items')
-        .insert(item)
-        .select()
-        .single();
+        return {
+          ...checklist,
+          items: addItemToList(checklist.items),
+          updatedAt: new Date(),
+        };
+      })
+    );
 
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['checklist', attendanceId] });
-      queryClient.invalidateQueries({ queryKey: ['attendances'] });
-    },
-  });
+    return newItem;
+  }, []);
 
-  // Atualizar item do checklist
-  const updateItemMutation = useMutation({
-    mutationFn: async ({ id, ...updates }: ChecklistItemUpdate) => {
-      const { data, error } = await supabase
-        .from('checklist_items')
-        .update(updates)
-        .eq('id', id)
-        .select()
-        .single();
+  const updateItem = useCallback((checklistId: string, itemId: string, updates: Partial<ChecklistItem>) => {
+    setChecklists(prev => 
+      prev.map(checklist => {
+        if (checklist.id !== checklistId) return checklist;
 
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['checklist', attendanceId] });
-      queryClient.invalidateQueries({ queryKey: ['attendances'] });
-    },
-  });
+        const updateItemInList = (items: ChecklistItem[]): ChecklistItem[] => {
+          return items.map(item => {
+            if (item.id === itemId) {
+              return { ...item, ...updates, updatedAt: new Date() };
+            }
+            if (item.children) {
+              return {
+                ...item,
+                children: updateItemInList(item.children),
+              };
+            }
+            return item;
+          });
+        };
 
-  // Deletar item do checklist
-  const deleteItemMutation = useMutation({
-    mutationFn: async (itemId: string) => {
-      const { error } = await supabase
-        .from('checklist_items')
-        .delete()
-        .eq('id', itemId);
+        return {
+          ...checklist,
+          items: updateItemInList(checklist.items),
+          updatedAt: new Date(),
+        };
+      })
+    );
+  }, []);
 
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['checklist', attendanceId] });
-      queryClient.invalidateQueries({ queryKey: ['attendances'] });
-    },
-  });
+  const deleteItem = useCallback((checklistId: string, itemId: string) => {
+    setChecklists(prev => 
+      prev.map(checklist => {
+        if (checklist.id !== checklistId) return checklist;
 
-  // Toggle status do item
-  const toggleItemMutation = useMutation({
-    mutationFn: async ({ id, completed }: { id: string; completed: boolean }) => {
-      const { data, error } = await supabase
-        .from('checklist_items')
-        .update({ completed })
-        .eq('id', id)
-        .select()
-        .single();
+        const deleteItemFromList = (items: ChecklistItem[]): ChecklistItem[] => {
+          return items
+            .filter(item => item.id !== itemId)
+            .map(item => ({
+              ...item,
+              children: item.children ? deleteItemFromList(item.children) : undefined,
+            }));
+        };
 
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['checklist', attendanceId] });
-      queryClient.invalidateQueries({ queryKey: ['attendances'] });
-    },
-  });
+        return {
+          ...checklist,
+          items: deleteItemFromList(checklist.items),
+          updatedAt: new Date(),
+        };
+      })
+    );
+  }, []);
+
+  const toggleItemCompleted = useCallback((checklistId: string, itemId: string) => {
+    setChecklists(prev => 
+      prev.map(checklist => {
+        if (checklist.id !== checklistId) return checklist;
+
+        const toggleItemInList = (items: ChecklistItem[]): ChecklistItem[] => {
+          return items.map(item => {
+            if (item.id === itemId) {
+              const completed = !item.completed;
+              return {
+                ...item,
+                completed,
+                status: completed ? 'completed' : 'pending',
+                updatedAt: new Date(),
+              };
+            }
+            if (item.children) {
+              return {
+                ...item,
+                children: toggleItemInList(item.children),
+              };
+            }
+            return item;
+          });
+        };
+
+        return {
+          ...checklist,
+          items: toggleItemInList(checklist.items),
+          updatedAt: new Date(),
+        };
+      })
+    );
+  }, []);
+
+  const getProgress = useCallback((checklist: Checklist) => {
+    const countItems = (items: ChecklistItem[]): { total: number; completed: number } => {
+      let total = 0;
+      let completed = 0;
+
+      items.forEach(item => {
+        total++;
+        if (item.completed) completed++;
+        
+        if (item.children) {
+          const childCounts = countItems(item.children);
+          total += childCounts.total;
+          completed += childCounts.completed;
+        }
+      });
+
+      return { total, completed };
+    };
+
+    const { total, completed } = countItems(checklist.items);
+    return {
+      total,
+      completed,
+      percentage: total > 0 ? Math.round((completed / total) * 100) : 0,
+    };
+  }, []);
 
   return {
-    checklistItems,
-    isLoading,
-    error,
-    addItem: addItemMutation.mutate,
-    updateItem: updateItemMutation.mutate,
-    deleteItem: deleteItemMutation.mutate,
-    toggleItem: toggleItemMutation.mutate,
-    isAdding: addItemMutation.isPending,
-    isUpdating: updateItemMutation.isPending,
-    isDeleting: deleteItemMutation.isPending,
-    isToggling: toggleItemMutation.isPending,
+    checklists,
+    loading,
+    addChecklist,
+    updateChecklist,
+    deleteChecklist,
+    addItem,
+    updateItem,
+    deleteItem,
+    toggleItemCompleted,
+    getProgress,
   };
-};
+}

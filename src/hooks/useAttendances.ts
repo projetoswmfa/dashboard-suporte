@@ -1,119 +1,166 @@
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '@/lib/supabase';
+import { Attendance, AttendanceStatus, AttendancePriority } from '@/types/attendance';
+import { AttendanceFilters } from './useAttendanceFilters';
+import { useAttendanceSync } from './useAttendanceSync';
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
-import type { Attendance, CreateAttendanceData } from '@/types/attendance';
-import { toast } from 'sonner';
-import { useRealtimeSync } from './useRealtimeSync';
+export function useAttendances() {
+  const [attendances, setAttendances] = useState<Attendance[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const { isOnline, addToPendingSync } = useAttendanceSync();
 
-export const useAttendances = () => {
-  // Ativa sincronização em tempo real automaticamente
-  useRealtimeSync();
-  
-  return useQuery({
-    queryKey: ['attendances'],
-    queryFn: async (): Promise<Attendance[]> => {
-      const { data, error } = await supabase
+  const fetchAttendances = useCallback(async (filters?: AttendanceFilters) => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      let query = supabase
         .from('attendances')
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) {
-        console.error('Error fetching attendances:', error);
-        throw error;
+      // Aplicar filtros
+      if (filters) {
+        if (filters.status !== 'all') {
+          query = query.eq('status', filters.status);
+        }
+        if (filters.priority !== 'all') {
+          query = query.eq('priority', filters.priority);
+        }
+        if (filters.search) {
+          query = query.or(`title.ilike.%${filters.search}%,description.ilike.%${filters.search}%`);
+        }
+        if (filters.dateRange.from) {
+          query = query.gte('created_at', filters.dateRange.from.toISOString());
+        }
+        if (filters.dateRange.to) {
+          query = query.lte('created_at', filters.dateRange.to.toISOString());
+        }
       }
 
-      return data.map(item => ({
-        ...item,
-        openDate: item.open_date,
-        closeDate: item.close_date,
-        ticksCompleted: item.ticks_completed,
-        totalTicks: item.total_ticks,
-      })) as Attendance[];
-    },
-  });
-};
+      const { data, error } = await query;
 
-export const useCreateAttendance = () => {
-  const queryClient = useQueryClient();
+      if (error) throw error;
 
-  return useMutation({
-    mutationFn: async (data: CreateAttendanceData): Promise<Attendance> => {
-      // Generate ID automatically
-      const id = `AT${String(Date.now()).slice(-6)}`;
+      setAttendances(data || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao carregar atendimentos');
+      console.error('Erro ao buscar atendimentos:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-      const newAttendance = {
-        id,
-        team: data.team,
-        status: 'Pendente' as const,
-        responsible: data.responsible,
-        priority: data.priority,
-        ticks_completed: 0,
-        total_ticks: data.total_ticks,
-        description: data.description,
+  const createAttendance = useCallback(async (attendance: Omit<Attendance, 'id' | 'created_at' | 'updated_at'>) => {
+    try {
+      const newAttendance: Attendance = {
+        ...attendance,
+        id: crypto.randomUUID(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       };
 
-      const { data: result, error } = await supabase
-        .from('attendances')
-        .insert([newAttendance])
-        .select()
-        .single();
+      if (isOnline) {
+        const { data, error } = await supabase
+          .from('attendances')
+          .insert(newAttendance)
+          .select()
+          .single();
 
-      if (error) {
-        console.error('Error creating attendance:', error);
-        throw error;
+        if (error) throw error;
+
+        setAttendances(prev => [data, ...prev]);
+        return data;
+      } else {
+        // Modo offline - adicionar à fila de sincronização
+        addToPendingSync(newAttendance);
+        setAttendances(prev => [newAttendance, ...prev]);
+        return newAttendance;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao criar atendimento');
+      throw err;
+    }
+  }, [isOnline, addToPendingSync]);
+
+  const updateAttendance = useCallback(async (id: string, updates: Partial<Attendance>) => {
+    try {
+      const updatedData = {
+        ...updates,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (isOnline) {
+        const { data, error } = await supabase
+          .from('attendances')
+          .update(updatedData)
+          .eq('id', id)
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        setAttendances(prev => 
+          prev.map(attendance => 
+            attendance.id === id ? data : attendance
+          )
+        );
+        return data;
+      } else {
+        // Modo offline - atualizar localmente
+        setAttendances(prev => 
+          prev.map(attendance => 
+            attendance.id === id ? { ...attendance, ...updatedData } : attendance
+          )
+        );
+        return { id, ...updatedData };
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao atualizar atendimento');
+      throw err;
+    }
+  }, [isOnline]);
+
+  const deleteAttendance = useCallback(async (id: string) => {
+    try {
+      if (isOnline) {
+        const { error } = await supabase
+          .from('attendances')
+          .delete()
+          .eq('id', id);
+
+        if (error) throw error;
       }
 
-      return {
-        ...result,
-        openDate: result.open_date,
-        closeDate: result.close_date,
-        ticksCompleted: result.ticks_completed,
-        totalTicks: result.total_ticks,
-      } as Attendance;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['attendances'] });
-      toast.success('Atendimento criado com sucesso!');
-    },
-    onError: (error) => {
-      console.error('Error creating attendance:', error);
-      toast.error('Erro ao criar atendimento');
-    },
-  });
-};
+      setAttendances(prev => prev.filter(attendance => attendance.id !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao excluir atendimento');
+      throw err;
+    }
+  }, [isOnline]);
 
-export const useUpdateAttendance = () => {
-  const queryClient = useQueryClient();
+  const updateStatus = useCallback(async (id: string, status: AttendanceStatus) => {
+    return updateAttendance(id, { status });
+  }, [updateAttendance]);
 
-  return useMutation({
-    mutationFn: async ({ id, updates }: { id: string; updates: Partial<Attendance> }) => {
-      const { data, error } = await supabase
-        .from('attendances')
-        .update({
-          ...updates,
-          open_date: updates.openDate,
-          close_date: updates.closeDate,
-          ticks_completed: updates.ticksCompleted,
-          total_ticks: updates.totalTicks,
-        })
-        .eq('id', id)
-        .select()
-        .single();
+  const updatePriority = useCallback(async (id: string, priority: AttendancePriority) => {
+    return updateAttendance(id, { priority });
+  }, [updateAttendance]);
 
-      if (error) {
-        console.error('Error updating attendance:', error);
-        throw error;
-      }
+  useEffect(() => {
+    fetchAttendances();
+  }, [fetchAttendances]);
 
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['attendances'] });
-      toast.success('Atendimento atualizado com sucesso!');
-    },
-    onError: (error) => {
-      console.error('Error updating attendance:', error);
-      toast.error('Erro ao atualizar atendimento');
-    },
-  });
-};
+  return {
+    attendances,
+    loading,
+    error,
+    fetchAttendances,
+    createAttendance,
+    updateAttendance,
+    deleteAttendance,
+    updateStatus,
+    updatePriority,
+  };
+}

@@ -1,126 +1,72 @@
-import { useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '@/lib/supabase';
+import { Attendance } from '@/types/attendance';
 
-/**
- * Hook para sincronizar automaticamente o progresso dos checklists
- * com os campos ticks_completed e total_ticks dos atendimentos
- */
-export const useAttendanceSync = () => {
-  const queryClient = useQueryClient();
+export function useAttendanceSync() {
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [pendingSync, setPendingSync] = useState<Attendance[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
-    const syncAttendanceProgress = async (attendanceId: string) => {
-      try {
-        // Buscar todos os itens do checklist para este atendimento
-        const { data: checklistItems, error: checklistError } = await supabase
-          .from('checklist_items')
-          .select('completed')
-          .eq('attendance_id', attendanceId);
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
 
-        if (checklistError) {
-          console.error('Erro ao buscar itens do checklist:', checklistError);
-          return;
-        }
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
-        const totalTicks = checklistItems.length;
-        const ticksCompleted = checklistItems.filter(item => item.completed).length;
-
-        // Atualizar o atendimento com o progresso atual
-        const { error: updateError } = await supabase
-          .from('attendances')
-          .update({
-            ticks_completed: ticksCompleted,
-            total_ticks: totalTicks,
-          })
-          .eq('id', attendanceId);
-
-        if (updateError) {
-          console.error('Erro ao atualizar progresso do atendimento:', updateError);
-          return;
-        }
-
-        // Invalidar queries para refletir as mudanças
-        queryClient.invalidateQueries({ queryKey: ['attendances'] });
-        queryClient.invalidateQueries({ queryKey: ['checklist', attendanceId] });
-
-      } catch (error) {
-        console.error('Erro na sincronização do progresso:', error);
-      }
-    };
-
-    // Função para sincronizar múltiplos atendimentos
-    const syncAllAttendances = async () => {
-      try {
-        const { data: attendances, error } = await supabase
-          .from('attendances')
-          .select('id');
-
-        if (error) {
-          console.error('Erro ao buscar atendimentos:', error);
-          return;
-        }
-
-        // Sincronizar cada atendimento
-        for (const attendance of attendances) {
-          await syncAttendanceProgress(attendance.id);
-        }
-      } catch (error) {
-        console.error('Erro na sincronização geral:', error);
-      }
-    };
-
-    // Executar sincronização inicial
-    syncAllAttendances();
-
-    // Configurar listeners para mudanças em tempo real
-    const checklistSubscription = supabase
-      .channel('checklist_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'checklist_items',
-        },
-        (payload) => {
-          if (payload.new && 'attendance_id' in payload.new) {
-            syncAttendanceProgress(payload.new.attendance_id as string);
-          } else if (payload.old && 'attendance_id' in payload.old) {
-            syncAttendanceProgress(payload.old.attendance_id as string);
-          }
-        }
-      )
-      .subscribe();
-
-    // Cleanup na desmontagem
     return () => {
-      checklistSubscription.unsubscribe();
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
-  }, [queryClient]);
+  }, []);
 
-  return {
-    // Função para sincronização manual
-    syncAttendance: async (attendanceId: string) => {
-      const { data: checklistItems } = await supabase
-        .from('checklist_items')
-        .select('completed')
-        .eq('attendance_id', attendanceId);
+  const addToPendingSync = useCallback((attendance: Attendance) => {
+    setPendingSync(prev => [...prev, attendance]);
+    // Salvar no localStorage para persistir offline
+    const stored = localStorage.getItem('pendingSync');
+    const pending = stored ? JSON.parse(stored) : [];
+    pending.push(attendance);
+    localStorage.setItem('pendingSync', JSON.stringify(pending));
+  }, []);
 
-      if (checklistItems) {
-        const totalTicks = checklistItems.length;
-        const ticksCompleted = checklistItems.filter(item => item.completed).length;
+  const syncPendingData = useCallback(async () => {
+    if (!isOnline || pendingSync.length === 0) return;
 
+    setIsSyncing(true);
+    try {
+      for (const attendance of pendingSync) {
         await supabase
           .from('attendances')
-          .update({
-            ticks_completed: ticksCompleted,
-            total_ticks: totalTicks,
-          })
-          .eq('id', attendanceId);
-
-        queryClient.invalidateQueries({ queryKey: ['attendances'] });
+          .insert(attendance);
       }
+      
+      setPendingSync([]);
+      localStorage.removeItem('pendingSync');
+    } catch (error) {
+      console.error('Erro ao sincronizar dados:', error);
+    } finally {
+      setIsSyncing(false);
     }
+  }, [isOnline, pendingSync]);
+
+  // Sincronizar automaticamente quando voltar online
+  useEffect(() => {
+    if (isOnline) {
+      // Carregar dados pendentes do localStorage
+      const stored = localStorage.getItem('pendingSync');
+      if (stored) {
+        const pending = JSON.parse(stored);
+        setPendingSync(pending);
+      }
+      syncPendingData();
+    }
+  }, [isOnline, syncPendingData]);
+
+  return {
+    isOnline,
+    pendingSync: pendingSync.length,
+    isSyncing,
+    addToPendingSync,
+    syncPendingData,
   };
-};
+}
